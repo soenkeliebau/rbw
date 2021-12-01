@@ -1,4 +1,5 @@
 use anyhow::Context as _;
+use rbw::api::TwoFactorProviderType;
 
 pub async fn register(
     sock: &mut crate::sock::Sock,
@@ -84,7 +85,7 @@ pub async fn login(
     state: std::sync::Arc<tokio::sync::RwLock<crate::agent::State>>,
     tty: Option<&str>,
 ) -> anyhow::Result<()> {
-    let db = load_db().await.unwrap_or_else(|_| rbw::db::Db::new());
+    let mut db = load_db().await.unwrap_or_else(|_| rbw::db::Db::new());
 
     if db.needs_login() {
         let url_str = config_base_url().await?;
@@ -137,44 +138,89 @@ pub async fn login(
                         iterations,
                         protected_key,
                         password,
-                        db,
+                        &mut db,
                         email,
                     )
                     .await?;
                     break;
                 }
                 Err(rbw::error::Error::TwoFactorRequired { providers }) => {
-                    if providers.contains(
-                        &rbw::api::TwoFactorProviderType::Authenticator,
-                    ) {
+                    let supported_2fa_methods_in_order = vec![
+                        rbw::api::TwoFactorProviderType::Authenticator,
+                        rbw::api::TwoFactorProviderType::Yubikey,
+                    ];
+
+                    let matching_2fa_methods: Vec<TwoFactorProviderType> =
+                        supported_2fa_methods_in_order
+                            .iter()
+                            .cloned()
+                            .filter(|provider_type| {
+                                providers.contains(provider_type)
+                            })
+                            .collect();
+
+                    if matching_2fa_methods.is_empty() {
+                        return Err(anyhow::anyhow!(
+                            "no supported 2fa method found in {:?}",
+                            providers
+                        ));
+                    }
+                    // We know that we have at least one matching provider in the list try them in order
+                    let mut all_errors: Vec<(
+                        rbw::api::TwoFactorProviderType,
+                        anyhow::Error,
+                    )> = vec![];
+                    for provider_type in matching_2fa_methods {
                         let (
                             access_token,
                             refresh_token,
                             iterations,
                             protected_key,
-                        ) = two_factor(
+                        ) = match two_factor(
                             tty,
                             &email,
                             password.clone(),
-                            rbw::api::TwoFactorProviderType::Authenticator,
+                            provider_type,
                         )
-                        .await?;
-                        login_success(
+                        .await
+                        {
+                            Ok(result) => result,
+                            Err(error) => {
+                                // An error occurred trying this 2fa method, skip to next method if any are left
+                                all_errors.push((provider_type, error));
+                                continue;
+                            }
+                        };
+
+                        match login_success(
                             sock,
-                            state,
+                            state.clone(),
                             access_token,
                             refresh_token,
                             iterations,
                             protected_key,
-                            password,
-                            db,
-                            email,
+                            password.clone(),
+                            &mut db,
+                            email.clone(),
                         )
-                        .await?;
-                        break;
-                    } else {
-                        return Err(anyhow::anyhow!("TODO"));
+                        .await
+                        {
+                            Ok(_) => {
+                                // Successfully logged in, no need to try any other methods
+                                break;
+                            }
+                            Err(error) => {
+                                // An error occurred trying to login, skip to next method if any are left
+                                all_errors.push((provider_type, error));
+                                continue;
+                            }
+                        };
                     }
+
+                    return Err(anyhow::anyhow!(
+                        "all supported 2fa methods failed: {:?}",
+                        all_errors
+                    ));
                 }
                 Err(rbw::error::Error::IncorrectPassword { message }) => {
                     if i == 3 {
@@ -207,6 +253,18 @@ async fn two_factor(
     provider: rbw::api::TwoFactorProviderType,
 ) -> anyhow::Result<(String, String, u32, String)> {
     let mut err_msg = None;
+    let (entry_prompt, entry_description) = match provider {
+        TwoFactorProviderType::Authenticator => {("Authenticator App",
+                                                  "Enter the 6 digit verification code from your authenticator app.")}
+        TwoFactorProviderType::Yubikey => {("Yubikey",
+                                            "Insert your Yubikey and push the button.")}
+               unsupported_method => {
+
+            return
+                Err(anyhow::anyhow!(
+                "unsupported two factor authentication method encountered: {:?} (this should not happen, please consider raising an issue for this!)",unsupported_method
+            ));}
+    };
     for i in 1_u8..=3 {
         let err = if i > 1 {
             // this unwrap is safe because we only ever continue the loop if
@@ -217,8 +275,8 @@ async fn two_factor(
         };
         let code = rbw::pinentry::getpin(
             &config_pinentry().await?,
-            "Authenticator App",
-            "Enter the 6 digit verification code from your authenticator app.",
+            entry_prompt,
+            entry_description,
             err.as_deref(),
             tty,
             true,
@@ -285,7 +343,7 @@ async fn login_success(
     iterations: u32,
     protected_key: String,
     password: rbw::locked::Password,
-    mut db: rbw::db::Db,
+    db: &mut rbw::db::Db,
     email: String,
 ) -> anyhow::Result<()> {
     db.access_token = Some(access_token.to_string());
