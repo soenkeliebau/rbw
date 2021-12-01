@@ -121,6 +121,7 @@ pub async fn login(
             )
             .await
             .context("failed to read password from pinentry")?;
+            eprintln!("starting login..");
             match rbw::actions::login(&email, password.clone(), None, None)
                 .await
             {
@@ -145,9 +146,10 @@ pub async fn login(
                     break;
                 }
                 Err(rbw::error::Error::TwoFactorRequired { providers }) => {
+                    // TODO: Move this to a static array or something similar somewhere
                     let supported_2fa_methods_in_order = vec![
-                        rbw::api::TwoFactorProviderType::Authenticator,
                         rbw::api::TwoFactorProviderType::Yubikey,
+                        rbw::api::TwoFactorProviderType::Authenticator,
                     ];
 
                     let matching_2fa_methods: Vec<TwoFactorProviderType> =
@@ -187,6 +189,7 @@ pub async fn login(
                             Ok(result) => result,
                             Err(error) => {
                                 // An error occurred trying this 2fa method, skip to next method if any are left
+                                println!("Error from two_factor");
                                 all_errors.push((provider_type, error));
                                 continue;
                             }
@@ -210,6 +213,7 @@ pub async fn login(
                                 break;
                             }
                             Err(error) => {
+                                println!("Error from login");
                                 // An error occurred trying to login, skip to next method if any are left
                                 all_errors.push((provider_type, error));
                                 continue;
@@ -217,9 +221,17 @@ pub async fn login(
                         };
                     }
 
+                    println!("all 2fa failed");
                     return Err(anyhow::anyhow!(
-                        "all supported 2fa methods failed: {:?}",
+                        "all supported 2fa methods failed:\n {}",
                         all_errors
+                            .iter()
+                            .map(|(provider_type, error)| format!(
+                                "{:?}:\n{:?}\n\n",
+                                provider_type, error
+                            ))
+                            .collect::<Vec<String>>()
+                            .join("\n")
                     ));
                 }
                 Err(rbw::error::Error::IncorrectPassword { message }) => {
@@ -252,6 +264,7 @@ async fn two_factor(
     password: rbw::locked::Password,
     provider: rbw::api::TwoFactorProviderType,
 ) -> anyhow::Result<(String, String, u32, String)> {
+    println!("entering twofactor");
     let mut err_msg = None;
     let (entry_prompt, entry_description) = match provider {
         TwoFactorProviderType::Authenticator => {("Authenticator App",
@@ -273,6 +286,7 @@ async fn two_factor(
         } else {
             None
         };
+        println!("getting code..");
         let code = rbw::pinentry::getpin(
             &config_pinentry().await?,
             entry_prompt,
@@ -283,6 +297,7 @@ async fn two_factor(
         )
         .await
         .context("failed to read code from pinentry")?;
+        println!("got code!");
         let code = std::str::from_utf8(code.password())
             .context("code was not valid utf8")?;
         match rbw::actions::login(
