@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.4.3] - 2022-02-10
+
+### Fixed
+
+* Restored packaged scripts to the crate bundle, since they are used by some
+  downstream packages (no functional changes) (#81)
+
+## [1.4.2] - 2022-02-10
+
+### Changed
+
+* Device id is now stored in a separate file in the local data directory
+  instead of as part of the config (#74)
+
+### Fixed
+
+* Fix api renaming in official bitwarden server (#80)
+
 ## [1.4.1] - 2021-10-28
 
 ### Added

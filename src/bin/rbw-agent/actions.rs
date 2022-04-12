@@ -62,10 +62,9 @@ pub async fn register(
                             message,
                         })
                         .context("failed to log in to bitwarden instance");
-                    } else {
-                        err_msg = Some(message);
-                        continue;
                     }
+                    err_msg = Some(message);
+                    continue;
                 }
                 Err(e) => {
                     return Err(e)
@@ -228,10 +227,9 @@ pub async fn login(
                             message,
                         })
                         .context("failed to log in to bitwarden instance");
-                    } else {
-                        err_msg = Some(message);
-                        continue;
                     }
+                    err_msg = Some(message);
+                    continue;
                 }
                 Err(e) => {
                     return Err(e)
@@ -307,10 +305,9 @@ async fn two_factor(
                         message,
                     })
                     .context("failed to log in to bitwarden instance");
-                } else {
-                    err_msg = Some(message);
-                    continue;
                 }
+                err_msg = Some(message);
+                continue;
             }
             // can get this if the user passes an empty string
             Err(rbw::error::Error::TwoFactorRequired { .. }) => {
@@ -320,10 +317,9 @@ async fn two_factor(
                         message,
                     })
                     .context("failed to log in to bitwarden instance");
-                } else {
-                    err_msg = Some(message);
-                    continue;
                 }
+                err_msg = Some(message);
+                continue;
             }
             Err(e) => {
                 return Err(e)
@@ -371,8 +367,7 @@ async fn login_success(
         &protected_key,
         &protected_private_key,
         &db.protected_org_keys,
-    )
-    .await;
+    );
 
     match res {
         Ok((keys, org_keys)) => {
@@ -420,7 +415,7 @@ pub async fn unlock(
         let email = config_email().await?;
 
         let mut err_msg = None;
-        for i in 1u8..=3 {
+        for i in 1_u8..=3 {
             let err = if i > 1 {
                 // this unwrap is safe because we only ever continue the loop
                 // if we have set err_msg
@@ -445,9 +440,7 @@ pub async fn unlock(
                 &protected_key,
                 &protected_private_key,
                 &db.protected_org_keys,
-            )
-            .await
-            {
+            ) {
                 Ok((keys, org_keys)) => {
                     unlock_success(state, keys, org_keys).await?;
                     break;
@@ -458,10 +451,9 @@ pub async fn unlock(
                             message,
                         })
                         .context("failed to unlock database");
-                    } else {
-                        err_msg = Some(message);
-                        continue;
                     }
+                    err_msg = Some(message);
+                    continue;
                 }
                 Err(e) => return Err(e).context("failed to unlock database"),
             }
@@ -637,11 +629,10 @@ async fn respond_encrypt(
 
 async fn config_email() -> anyhow::Result<String> {
     let config = rbw::config::Config::load_async().await?;
-    if let Some(email) = config.email {
-        Ok(email)
-    } else {
-        Err(anyhow::anyhow!("failed to find email address in config"))
-    }
+    config.email.map_or_else(
+        || Err(anyhow::anyhow!("failed to find email address in config")),
+        Ok,
+    )
 }
 
 async fn load_db() -> anyhow::Result<rbw::db::Db> {
